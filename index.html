@@ -1,0 +1,568 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="CameraFX">
+<meta name="theme-color" content="#0a0a0a">
+<link rel="manifest" href="manifest.json">
+<link rel="apple-touch-icon" href="icon-192.png">
+<title>CameraFX</title>
+<style>
+*{margin:0;padding:0;box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{width:100%;height:100%;overflow:hidden;background:#0a0a0a;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;color:#fff;touch-action:none}
+#app{position:relative;width:100%;height:100%;display:flex;flex-direction:column}
+canvas#preview{position:absolute;top:0;left:0;width:100%;height:100%;object-fit:cover}
+video#cam{display:none}
+
+/* Top bar */
+.top-bar{position:absolute;top:0;left:0;right:0;padding:12px 16px;display:flex;justify-content:space-between;align-items:center;z-index:10}
+.logo{font-size:15px;font-weight:600;letter-spacing:1px;opacity:.7}
+.btn-icon{width:40px;height:40px;border-radius:50%;background:rgba(255,255,255,.12);border:none;color:#fff;font-size:18px;display:flex;align-items:center;justify-content:center;cursor:pointer;backdrop-filter:blur(8px);-webkit-backdrop-filter:blur(8px);transition:background .2s}
+.btn-icon:active{background:rgba(255,255,255,.25)}
+
+/* Effect name overlay */
+.effect-label{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);font-size:28px;font-weight:300;letter-spacing:3px;opacity:0;transition:opacity .3s;pointer-events:none;text-transform:uppercase;text-shadow:0 2px 20px rgba(0,0,0,.6)}
+.effect-label.show{opacity:1}
+
+/* Bottom controls */
+.bottom{position:absolute;bottom:0;left:0;right:0;z-index:10;padding-bottom:max(20px,env(safe-area-inset-bottom))}
+
+/* Effect carousel */
+.carousel{display:flex;gap:8px;padding:0 16px 12px;overflow-x:auto;scrollbar-width:none;-ms-overflow-style:none;scroll-snap-type:x mandatory}
+.carousel::-webkit-scrollbar{display:none}
+.fx-chip{flex-shrink:0;padding:6px 14px;border-radius:20px;background:rgba(255,255,255,.08);border:1px solid rgba(255,255,255,.1);font-size:12px;letter-spacing:.5px;cursor:pointer;transition:all .2s;scroll-snap-align:center;white-space:nowrap}
+.fx-chip.active{background:rgba(255,255,255,.2);border-color:rgba(255,255,255,.4)}
+
+/* Slider */
+.slider-row{display:flex;align-items:center;padding:0 20px 14px;gap:10px}
+.slider-row label{font-size:10px;letter-spacing:1px;opacity:.5;text-transform:uppercase}
+input[type=range]{flex:1;-webkit-appearance:none;appearance:none;height:2px;background:rgba(255,255,255,.2);border-radius:1px;outline:none}
+input[type=range]::-webkit-slider-thumb{-webkit-appearance:none;width:16px;height:16px;border-radius:50%;background:#fff;cursor:pointer}
+
+/* Action row */
+.action-row{display:flex;align-items:center;justify-content:center;gap:40px;padding:0 0 8px}
+.btn-capture{width:64px;height:64px;border-radius:50%;background:transparent;border:3px solid rgba(255,255,255,.6);display:flex;align-items:center;justify-content:center;cursor:pointer;transition:all .2s;position:relative}
+.btn-capture .inner{width:50px;height:50px;border-radius:50%;background:#fff;transition:all .3s}
+.btn-capture.recording .inner{width:24px;height:24px;border-radius:6px;background:#e33}
+.btn-photo{width:44px;height:44px;border-radius:50%;background:rgba(255,255,255,.12);border:none;color:#fff;font-size:20px;display:flex;align-items:center;justify-content:center;cursor:pointer;backdrop-filter:blur(8px)}
+
+/* Loading */
+.loading{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;z-index:20}
+.loading .spinner{width:32px;height:32px;border:2px solid rgba(255,255,255,.2);border-top-color:#fff;border-radius:50%;animation:spin .8s linear infinite;margin:0 auto 12px}
+.loading p{font-size:13px;opacity:.6}
+@keyframes spin{to{transform:rotate(360deg)}}
+
+/* Permission denied */
+.error-msg{position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);text-align:center;z-index:20;padding:20px}
+.error-msg h2{font-size:18px;margin-bottom:8px;font-weight:500}
+.error-msg p{font-size:13px;opacity:.6;line-height:1.5}
+</style>
+</head>
+<body>
+<div id="app">
+  <video id="cam" playsinline muted></video>
+  <canvas id="preview"></canvas>
+
+  <div class="loading" id="loading">
+    <div class="spinner"></div>
+    <p>Accessing camera...</p>
+  </div>
+
+  <div class="error-msg" id="error" style="display:none">
+    <h2>Camera Access Required</h2>
+    <p>Please allow camera access in your browser settings and reload.</p>
+  </div>
+
+  <div class="top-bar" id="controls" style="display:none">
+    <div class="logo">CAMERAFX</div>
+    <button class="btn-icon" id="flipBtn" title="Flip camera">⟲</button>
+  </div>
+
+  <div class="effect-label" id="fxLabel"></div>
+
+  <div class="bottom" id="bottomUI" style="display:none">
+    <div class="carousel" id="carousel"></div>
+    <div class="slider-row">
+      <label>Intensity</label>
+      <input type="range" id="intensity" min="0" max="100" value="70">
+    </div>
+    <div class="action-row">
+      <button class="btn-photo" id="photoBtn" title="Take photo">📷</button>
+      <button class="btn-capture" id="recBtn" title="Record video"><div class="inner"></div></button>
+      <button class="btn-photo" id="dlBtn" title="Download last" style="opacity:.3;pointer-events:none">💾</button>
+    </div>
+  </div>
+</div>
+
+<script>
+// ============================================================
+// CameraFX — Real-time WebGL Camera Effects
+// ============================================================
+
+const EFFECTS = [
+  {name:'Normal',id:'normal'},
+  {name:'Glitch',id:'glitch'},
+  {name:'VHS',id:'vhs'},
+  {name:'Neon Edge',id:'neon'},
+  {name:'Halftone',id:'halftone'},
+  {name:'Thermal',id:'thermal'},
+  {name:'Pixelate',id:'pixelate'},
+  {name:'Bloom',id:'bloom'},
+  {name:'Chromatic',id:'chromatic'},
+  {name:'Film Grain',id:'grain'},
+  {name:'Mirror',id:'mirror'},
+  {name:'Liquid',id:'liquid'}
+];
+
+// Shader fragments per effect
+const FRAG_FUNCS = {
+normal: `vec4 fx(vec2 uv,float t,float i){return texture(uTex,uv);}`,
+
+glitch: `vec4 fx(vec2 uv,float t,float i){
+  float amt=i*.06;
+  float sl=floor(uv.y*40.)/40.;
+  float shift=amt*(fract(sin(sl*43.+floor(t*8.))*4567.)-0.5);
+  float r=texture(uTex,uv+vec2(shift,0)).r;
+  float g=texture(uTex,uv).g;
+  float b=texture(uTex,uv-vec2(shift,0)).b;
+  float scanline=.95+.05*sin(uv.y*800.+t*10.);
+  return vec4(r,g,b,1)*scanline;
+}`,
+
+vhs: `vec4 fx(vec2 uv,float t,float i){
+  vec2 u=uv;
+  u.x+=sin(u.y*120.+t*4.)*.002*i;
+  u.x+=sin(u.y*10.+t*.5)*.005*i;
+  float n=fract(sin(dot(u,vec2(12.9898,78.233))+t)*43758.5453);
+  float r=texture(uTex,u+vec2(.003*i,0)).r;
+  float g=texture(uTex,u).g;
+  float b=texture(uTex,u-vec2(.003*i,0)).b;
+  vec3 c=vec3(r,g,b);
+  c=mix(c,c*vec3(1,.95,.9),.5*i);
+  float line=sin(u.y*300.+t*20.)*.04*i;
+  c+=line;
+  c+=n*.08*i;
+  return vec4(c,1);
+}`,
+
+neon: `vec4 fx(vec2 uv,float t,float i){
+  vec2 px=1./uRes;
+  vec3 tl=texture(uTex,uv+vec2(-px.x,px.y)).rgb;
+  vec3 tr=texture(uTex,uv+vec2(px.x,px.y)).rgb;
+  vec3 bl=texture(uTex,uv+vec2(-px.x,-px.y)).rgb;
+  vec3 br=texture(uTex,uv+vec2(px.x,-px.y)).rgb;
+  vec3 sx=tl+2.*texture(uTex,uv+vec2(-px.x,0)).rgb+bl-tr-2.*texture(uTex,uv+vec2(px.x,0)).rgb-br;
+  vec3 sy=tl+2.*texture(uTex,uv+vec2(0,px.y)).rgb+tr-bl-2.*texture(uTex,uv+vec2(0,-px.y)).rgb-br;
+  float edge=length(sx)+length(sy);
+  vec3 glow=vec3(.2,.8,1)*edge*2.*i;
+  glow+=vec3(1,.2,.6)*edge*edge*i;
+  vec3 bg=texture(uTex,uv).rgb*.15*i;
+  return vec4(bg+glow,1);
+}`,
+
+halftone: `vec4 fx(vec2 uv,float t,float i){
+  float sz=mix(8.,3.,i);
+  vec2 cell=floor(uv*uRes/sz)*sz/uRes;
+  vec3 c=texture(uTex,cell).rgb;
+  float lum=dot(c,vec3(.299,.587,.114));
+  vec2 p=fract(uv*uRes/sz)-.5;
+  float d=length(p);
+  float r=lum*.6;
+  float dot2=smoothstep(r,r-.02,d);
+  vec3 base=texture(uTex,uv).rgb;
+  return vec4(mix(base,c*dot2,i),1);
+}`,
+
+thermal: `vec4 fx(vec2 uv,float t,float i){
+  vec3 c=texture(uTex,uv).rgb;
+  float lum=dot(c,vec3(.299,.587,.114));
+  vec3 cold=vec3(.1,.0,.3);
+  vec3 mid1=vec3(.0,.2,.8);
+  vec3 mid2=vec3(.0,.8,.2);
+  vec3 warm=vec3(1.,1.,.0);
+  vec3 hot=vec3(1.,.2,.0);
+  vec3 th;
+  if(lum<.25)th=mix(cold,mid1,lum*4.);
+  else if(lum<.5)th=mix(mid1,mid2,(lum-.25)*4.);
+  else if(lum<.75)th=mix(mid2,warm,(lum-.5)*4.);
+  else th=mix(warm,hot,(lum-.75)*4.);
+  return vec4(mix(c,th,i),1);
+}`,
+
+pixelate: `vec4 fx(vec2 uv,float t,float i){
+  float sz=mix(1.,32.,i);
+  vec2 cell=floor(uv*uRes/sz)*sz/uRes;
+  return texture(uTex,cell);
+}`,
+
+bloom: `vec4 fx(vec2 uv,float t,float i){
+  vec3 c=texture(uTex,uv).rgb;
+  vec3 bloom2=vec3(0);
+  float samples=8.;
+  for(float j=1.;j<=8.;j++){
+    float r=j*.004*i;
+    for(float a=0.;a<6.28;a+=6.28/8.){
+      vec2 off=vec2(cos(a),sin(a))*r;
+      vec3 s=texture(uTex,uv+off).rgb;
+      float b=max(max(s.r,s.g),s.b);
+      bloom2+=s*smoothstep(.5,.9,b);
+    }
+  }
+  bloom2/=64.;
+  return vec4(c+bloom2*1.5*i,1);
+}`,
+
+chromatic: `vec4 fx(vec2 uv,float t,float i){
+  vec2 dir=uv-vec2(.5);
+  float d=length(dir)*.02*i;
+  float r=texture(uTex,uv+dir*d).r;
+  float g=texture(uTex,uv).g;
+  float b=texture(uTex,uv-dir*d).b;
+  return vec4(r,g,b,1);
+}`,
+
+grain: `vec4 fx(vec2 uv,float t,float i){
+  vec3 c=texture(uTex,uv).rgb;
+  float n=fract(sin(dot(uv*uRes+vec2(t*100.,0),vec2(12.9898,78.233)))*43758.5453);
+  n=(n-.5)*i*.35;
+  c+=n;
+  float v=1.-.3*i*length(uv-.5);
+  c*=v;
+  c=pow(c,vec3(1.+.1*i));
+  return vec4(c,1);
+}`,
+
+mirror: `vec4 fx(vec2 uv,float t,float i){
+  vec2 u=uv;
+  if(u.x>.5) u.x=1.-u.x;
+  vec3 c=mix(texture(uTex,uv).rgb,texture(uTex,u).rgb,i);
+  return vec4(c,1);
+}`,
+
+liquid: `vec4 fx(vec2 uv,float t,float i){
+  vec2 u=uv;
+  u.x+=sin(u.y*10.+t*2.)*.03*i;
+  u.y+=cos(u.x*10.+t*2.)*.03*i;
+  u.x+=sin(u.y*20.+t*3.)*.015*i;
+  u.y+=cos(u.x*20.+t*3.)*.015*i;
+  return texture(uTex,u);
+}`
+};
+
+// Build vertex + fragment shaders
+const VERT = `#version 300 es
+in vec2 aPos;
+out vec2 vUv;
+void main(){
+  vUv=aPos*.5+.5;
+  vUv.y=1.-vUv.y;
+  gl_Position=vec4(aPos,0,1);
+}`;
+
+function buildFrag(fxId){
+  return `#version 300 es
+precision highp float;
+in vec2 vUv;
+out vec4 fragColor;
+uniform sampler2D uTex;
+uniform float uTime;
+uniform float uIntensity;
+uniform vec2 uRes;
+${FRAG_FUNCS[fxId]}
+void main(){fragColor=fx(vUv,uTime,uIntensity);}`;
+}
+
+// WebGL1 fallbacks
+const VERT1 = `attribute vec2 aPos;
+varying vec2 vUv;
+void main(){
+  vUv=aPos*.5+.5;
+  vUv.y=1.-vUv.y;
+  gl_Position=vec4(aPos,0,1);
+}`;
+
+function buildFrag1(fxId){
+  let body = FRAG_FUNCS[fxId]
+    .replace(/texture\(/g,'texture2D(')
+    .replace(/vec4 fx/,'vec4 fx')
+    .replace(/in vec2/,'')
+    .replace(/out vec4/,'');
+  return `precision highp float;
+varying vec2 vUv;
+uniform sampler2D uTex;
+uniform float uTime;
+uniform float uIntensity;
+uniform vec2 uRes;
+${body.replace('vec4 fx(vec2 uv,float t,float i)','vec4 fx(vec2 uv,float t,float i)')}
+void main(){gl_FragColor=fx(vUv,uTime,uIntensity);}`;
+}
+
+// ============ App State ============
+let gl, canvas, video;
+let currentFx = 0;
+let intensity = 0.7;
+let programs = {};
+let texId;
+let facingMode = 'environment';
+let stream = null;
+let isRecording = false;
+let mediaRecorder = null;
+let recordedChunks = [];
+let lastBlobUrl = null;
+let lastExt = '.mp4';
+let animId;
+let startTime = 0;
+let isWebGL2 = true;
+
+// ============ Init ============
+async function init(){
+  canvas = document.getElementById('preview');
+  video = document.getElementById('cam');
+
+  // Try WebGL2 first
+  gl = canvas.getContext('webgl2', {antialias:false, preserveDrawingBuffer:true});
+  if(!gl){
+    gl = canvas.getContext('webgl', {antialias:false, preserveDrawingBuffer:true});
+    isWebGL2 = false;
+  }
+  if(!gl){
+    showError('WebGL not supported on this device.');
+    return;
+  }
+
+  // Quad
+  const buf = gl.createBuffer();
+  gl.bindBuffer(gl.ARRAY_BUFFER, buf);
+  gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1,-1,1,-1,-1,1,1,1]), gl.STATIC_DRAW);
+
+  // Compile all effect programs
+  for(const fx of EFFECTS){
+    programs[fx.id] = createProgram(fx.id);
+  }
+
+  // Texture
+  texId = gl.createTexture();
+  gl.bindTexture(gl.TEXTURE_2D, texId);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+
+  buildCarousel();
+  await startCamera();
+
+  document.getElementById('controls').style.display='';
+  document.getElementById('bottomUI').style.display='';
+  document.getElementById('loading').style.display='none';
+
+  // Events
+  document.getElementById('flipBtn').onclick = flipCamera;
+  document.getElementById('intensity').oninput = e => { intensity = e.target.value/100; };
+  document.getElementById('photoBtn').onclick = takePhoto;
+  document.getElementById('recBtn').onclick = toggleRecord;
+  document.getElementById('dlBtn').onclick = downloadLast;
+
+  startTime = performance.now()/1000;
+  render();
+}
+
+function createProgram(fxId){
+  let vs, fs;
+  if(isWebGL2){
+    vs = compile(gl.VERTEX_SHADER, VERT);
+    fs = compile(gl.FRAGMENT_SHADER, buildFrag(fxId));
+  } else {
+    vs = compile(gl.VERTEX_SHADER, VERT1);
+    fs = compile(gl.FRAGMENT_SHADER, buildFrag1(fxId));
+  }
+  const p = gl.createProgram();
+  gl.attachShader(p, vs);
+  gl.attachShader(p, fs);
+  if(isWebGL2) gl.bindAttribLocation(p, 0, 'aPos');
+  else gl.bindAttribLocation(p, 0, 'aPos');
+  gl.linkProgram(p);
+  if(!gl.getProgramParameter(p, gl.LINK_STATUS)){
+    console.error('Link error for '+fxId+':', gl.getProgramInfoLog(p));
+  }
+  return {
+    prog: p,
+    uTime: gl.getUniformLocation(p, 'uTime'),
+    uIntensity: gl.getUniformLocation(p, 'uIntensity'),
+    uRes: gl.getUniformLocation(p, 'uRes'),
+    uTex: gl.getUniformLocation(p, 'uTex')
+  };
+}
+
+function compile(type, src){
+  const s = gl.createShader(type);
+  gl.shaderSource(s, src);
+  gl.compileShader(s);
+  if(!gl.getShaderParameter(s, gl.COMPILE_STATUS)){
+    console.error('Shader error:', gl.getShaderInfoLog(s), '\n', src);
+  }
+  return s;
+}
+
+async function startCamera(){
+  try{
+    if(stream) stream.getTracks().forEach(t=>t.stop());
+    stream = await navigator.mediaDevices.getUserMedia({
+      video:{facingMode, width:{ideal:1280}, height:{ideal:720}},
+      audio:false
+    });
+    video.srcObject = stream;
+    await video.play();
+  }catch(e){
+    showError('Camera access denied. Please allow camera permissions.');
+  }
+}
+
+function showError(msg){
+  document.getElementById('loading').style.display='none';
+  const el = document.getElementById('error');
+  el.style.display='';
+  el.querySelector('p').textContent = msg;
+}
+
+async function flipCamera(){
+  facingMode = facingMode === 'user' ? 'environment' : 'user';
+  await startCamera();
+}
+
+// ============ Carousel ============
+function buildCarousel(){
+  const c = document.getElementById('carousel');
+  EFFECTS.forEach((fx,i) => {
+    const chip = document.createElement('div');
+    chip.className = 'fx-chip' + (i===0?' active':'');
+    chip.textContent = fx.name;
+    chip.onclick = () => selectFx(i);
+    c.appendChild(chip);
+  });
+}
+
+function selectFx(i){
+  currentFx = i;
+  document.querySelectorAll('.fx-chip').forEach((c,j) => c.classList.toggle('active', j===i));
+  // Flash label
+  const lbl = document.getElementById('fxLabel');
+  lbl.textContent = EFFECTS[i].name;
+  lbl.classList.add('show');
+  clearTimeout(lbl._t);
+  lbl._t = setTimeout(()=>lbl.classList.remove('show'), 800);
+}
+
+// ============ Render ============
+function render(){
+  if(video.readyState < 2){
+    animId = requestAnimationFrame(render);
+    return;
+  }
+
+  // Resize canvas to match video
+  if(canvas.width !== video.videoWidth || canvas.height !== video.videoHeight){
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+  }
+
+  gl.viewport(0, 0, canvas.width, canvas.height);
+
+  // Upload video frame
+  gl.bindTexture(gl.TEXTURE_2D, texId);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
+
+  // Use current effect
+  const fx = EFFECTS[currentFx];
+  const p = programs[fx.id];
+  gl.useProgram(p.prog);
+
+  // Uniforms
+  const t = performance.now()/1000 - startTime;
+  gl.uniform1f(p.uTime, t);
+  gl.uniform1f(p.uIntensity, fx.id === 'normal' ? 0 : intensity);
+  gl.uniform2f(p.uRes, canvas.width, canvas.height);
+  gl.uniform1i(p.uTex, 0);
+
+  // Draw
+  gl.enableVertexAttribArray(0);
+  gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+  gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
+
+  animId = requestAnimationFrame(render);
+}
+
+// ============ Capture ============
+function takePhoto(){
+  const link = document.createElement('a');
+  link.download = 'camerafx_' + Date.now() + '.jpg';
+  link.href = canvas.toDataURL('image/jpeg', 0.95);
+  link.click();
+}
+
+function toggleRecord(){
+  const btn = document.getElementById('recBtn');
+  if(!isRecording){
+    recordedChunks = [];
+    const stream2 = canvas.captureStream(30);
+    // Try to get audio too
+    try{
+      const audioTracks = stream.getAudioTracks();
+      audioTracks.forEach(t => stream2.addTrack(t));
+    }catch(e){}
+
+    // Prefer mp4 (works on iOS Safari), fall back to webm (Chrome/Firefox)
+    const mimeTypes = ['video/mp4','video/mp4;codecs=avc1','video/webm;codecs=vp9','video/webm;codecs=vp8','video/webm'];
+    let mime = '';
+    for(const m of mimeTypes){
+      if(MediaRecorder.isTypeSupported(m)){mime=m;break;}
+    }
+
+    mediaRecorder = new MediaRecorder(stream2, mime ? {mimeType:mime} : {});
+    mediaRecorder.ondataavailable = e => { if(e.data.size>0) recordedChunks.push(e.data); };
+    mediaRecorder.onstop = () => {
+      const isMP4 = mime.includes('mp4');
+      const ext = isMP4 ? '.mp4' : '.mp4'; // always save as .mp4 for compatibility
+      const blob = new Blob(recordedChunks, {type: isMP4 ? 'video/mp4' : 'video/mp4'});
+      if(lastBlobUrl) URL.revokeObjectURL(lastBlobUrl);
+      lastBlobUrl = URL.createObjectURL(blob);
+      lastExt = ext;
+      const dl = document.getElementById('dlBtn');
+      dl.style.opacity='1';
+      dl.style.pointerEvents='auto';
+      // Auto download
+      const a = document.createElement('a');
+      a.download = 'camerafx_' + Date.now() + ext;
+      a.href = lastBlobUrl;
+      a.click();
+    };
+    mediaRecorder.start();
+    isRecording = true;
+    btn.classList.add('recording');
+  } else {
+    mediaRecorder.stop();
+    isRecording = false;
+    btn.classList.remove('recording');
+  }
+}
+
+function downloadLast(){
+  if(!lastBlobUrl) return;
+  const a = document.createElement('a');
+  a.download = 'camerafx_recording' + lastExt;
+  a.href = lastBlobUrl;
+  a.click();
+}
+
+// ============ PWA ============
+if('serviceWorker' in navigator){
+  navigator.serviceWorker.register('sw.js').catch(()=>{});
+}
+
+// ============ Boot ============
+init();
+</script>
+</body>
+</html>
