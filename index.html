@@ -114,7 +114,13 @@ const EFFECTS = [
   {name:'Chromatic',id:'chromatic'},
   {name:'Film Grain',id:'grain'},
   {name:'Mirror',id:'mirror'},
-  {name:'Liquid',id:'liquid'}
+  {name:'Liquid',id:'liquid'},
+  {name:'Slit Scan',id:'slitscan'},
+  {name:'Data Mosh',id:'datamosh'},
+  {name:'RGB Split',id:'rgbsplit'},
+  {name:'Corrupted',id:'corrupted'},
+  {name:'Fracture',id:'fracture'},
+  {name:'Melt',id:'melt'}
 ];
 
 // Shader fragments per effect
@@ -249,6 +255,140 @@ liquid: `vec4 fx(vec2 uv,float t,float i){
   u.x+=sin(u.y*20.+t*3.)*.015*i;
   u.y+=cos(u.x*20.+t*3.)*.015*i;
   return texture(uTex,u);
+}`,
+
+// Slit Scan — each row samples from a different horizontal offset over time
+slitscan: `vec4 fx(vec2 uv,float t,float i){
+  float speed=t*0.5*i;
+  float rowPhase=uv.y*3.14159*2.;
+  float xShift=sin(rowPhase+speed)*0.3*i;
+  float yShift=sin(uv.y*20.+t*1.5)*.02*i;
+  vec2 u=vec2(fract(uv.x+xShift),uv.y+yShift);
+  vec3 c=texture(uTex,u).rgb;
+  // Time-stagger RGB channels for chromatic slit effect
+  float r=texture(uTex,vec2(fract(uv.x+xShift*.8),uv.y+yShift)).r;
+  float g=texture(uTex,vec2(fract(uv.x+xShift),uv.y+yShift)).g;
+  float b=texture(uTex,vec2(fract(uv.x+xShift*1.2),uv.y+yShift)).b;
+  // Vertical stretch bands
+  float band=smoothstep(.0,.02,abs(sin(uv.y*40.+t*3.)))*.3+.7;
+  return vec4(r*band,g*band,b*band,1);
+}`,
+
+// Data Mosh — simulated blocky displacement like broken video codec
+datamosh: `vec4 fx(vec2 uv,float t,float i){
+  // Create macro blocks
+  float blockSize=mix(64.,8.,i);
+  vec2 block=floor(uv*uRes/blockSize);
+  // Random displacement per block, changes every ~0.3s
+  float seed=floor(t*3.);
+  float rx=fract(sin(dot(block+seed,vec2(127.1,311.7)))*43758.5453);
+  float ry=fract(sin(dot(block+seed,vec2(269.5,183.3)))*43758.5453);
+  // Some blocks freeze (stay in place), others shift
+  float doShift=step(.4,fract(sin(dot(block,vec2(419.2,371.9))+seed)*2531.));
+  vec2 shift=vec2(rx-.5,ry-.5)*.15*i*doShift;
+  vec3 c=texture(uTex,uv+shift).rgb;
+  // Occasional full-row glitch
+  float rowGlitch=step(.97,fract(sin(floor(uv.y*30.)+seed*7.)*1234.));
+  c=mix(c,texture(uTex,vec2(fract(uv.x+.3),uv.y)).rgb,rowGlitch*i);
+  // Posterize some blocks
+  float doPoster=step(.7,rx);
+  c=mix(c,floor(c*4.)/4.,doPoster*i*.6);
+  return vec4(c,1);
+}`,
+
+// RGB Split — aggressive channel separation with motion
+rgbsplit: `vec4 fx(vec2 uv,float t,float i){
+  float amt=i*.05;
+  float angle=t*.5;
+  vec2 rOff=vec2(cos(angle),sin(angle))*amt;
+  vec2 gOff=vec2(cos(angle+2.09),sin(angle+2.09))*amt;
+  vec2 bOff=vec2(cos(angle+4.19),sin(angle+4.19))*amt;
+  float r=texture(uTex,uv+rOff).r;
+  float g=texture(uTex,uv+gOff).g;
+  float b=texture(uTex,uv+bOff).b;
+  // Pulse the separation
+  float pulse=.5+.5*sin(t*4.);
+  r=texture(uTex,uv+rOff*pulse).r;
+  g=texture(uTex,uv+gOff*pulse).g;
+  b=texture(uTex,uv+bOff*pulse).b;
+  // Add subtle scan lines
+  float scan=.92+.08*sin(uv.y*uRes.y*.5);
+  return vec4(r*scan,g*scan,b*scan,1);
+}`,
+
+// Corrupted — digital file corruption aesthetic
+corrupted: `vec4 fx(vec2 uv,float t,float i){
+  vec2 u=uv;
+  // Chunk displacement - horizontal bands shift randomly
+  float chunkY=floor(uv.y*15.)/15.;
+  float seed=floor(t*5.);
+  float chunkRand=fract(sin(chunkY*234.+seed)*5678.);
+  float doCorrupt=step(.6,chunkRand);
+  u.x=fract(u.x+chunkRand*.4*doCorrupt*i);
+  // Color channel destruction
+  vec3 c=texture(uTex,u).rgb;
+  float killChannel=fract(sin(chunkY*567.+seed)*8901.);
+  if(killChannel>.8) c.r=1.-c.r;
+  if(killChannel<.2) c.b=c.g;
+  // Bit crush effect
+  float bits=mix(256.,4.,i*doCorrupt);
+  c=floor(c*bits)/bits;
+  // Static bursts
+  float noise=fract(sin(dot(floor(uv*uRes/2.),vec2(12.9898,78.233))+t*100.)*43758.5453);
+  float staticBurst=step(.85,fract(sin(seed*456.)*789.))*step(.5,doCorrupt);
+  c=mix(c,vec3(noise),staticBurst*i*.7);
+  // Horizontal tear lines
+  float tear=step(.98,fract(sin(uv.y*100.+seed)*4321.));
+  c=mix(c,vec3(1),tear*i);
+  return vec4(c,1);
+}`,
+
+// Fracture — shattered glass / kaleidoscope displacement
+fracture: `vec4 fx(vec2 uv,float t,float i){
+  vec2 center=vec2(.5);
+  vec2 d=uv-center;
+  float angle=atan(d.y,d.x);
+  float dist=length(d);
+  // Create angular segments
+  float segments=mix(2.,12.,i);
+  float seg=floor(angle/(6.28318/segments));
+  float segAngle=seg*(6.28318/segments);
+  // Reflect within segment
+  float localAngle=angle-segAngle;
+  float halfSeg=3.14159/segments;
+  if(localAngle>halfSeg) localAngle=2.*halfSeg-localAngle;
+  float newAngle=segAngle+localAngle;
+  // Slight rotation over time
+  newAngle+=sin(t*.5)*.1*i;
+  vec2 u=center+vec2(cos(newAngle),sin(newAngle))*dist;
+  u=clamp(u,vec2(0),vec2(1));
+  vec3 c=texture(uTex,u).rgb;
+  // Edge glow between segments
+  float edgeDist=abs(localAngle-halfSeg)/halfSeg;
+  float edge=smoothstep(0.,.05,edgeDist);
+  c*=mix(.5,1.,edge);
+  c+=vec3(.3,.5,.8)*(1.-edge)*.3*i;
+  return vec4(c,1);
+}`,
+
+// Melt — image melts/drips downward
+melt: `vec4 fx(vec2 uv,float t,float i){
+  vec2 u=uv;
+  // Drip columns at different speeds
+  float col=floor(uv.x*30.)/30.;
+  float dripSpeed=fract(sin(col*456.789)*123.456);
+  float dripAmt=sin(t*(.5+dripSpeed*.5))*i*.15;
+  dripAmt*=smoothstep(0.,.3,uv.y); // more drip at top
+  u.y=u.y-abs(dripAmt)*dripSpeed;
+  // Horizontal smear
+  float smear=sin(uv.y*5.+t*2.)*.02*i;
+  u.x+=smear;
+  vec3 c=texture(uTex,clamp(u,vec2(0),vec2(1))).rgb;
+  // Streaky color bleed
+  float streak=sin(uv.x*60.+t)*.5+.5;
+  vec3 bleed=texture(uTex,vec2(u.x,clamp(u.y-.01*i,0.,1.))).rgb;
+  c=mix(c,bleed,streak*.3*i);
+  return vec4(c,1);
 }`
 };
 
